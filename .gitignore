@@ -1,0 +1,13 @@
+# Local deployment parameters and tenant-specific values
+*.parameters.json
+!*.sample.parameters.json
+
+# PowerShell/local output
+*.log
+*.tmp
+*.bak
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

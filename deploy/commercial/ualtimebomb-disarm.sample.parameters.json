@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus2" },
+    "WorkflowState": { "value": "Disabled" },
+    "SentinelWorkspaceResourceGroup": { "value": "<sentinel-resource-group>" },
+    "SentinelWorkspaceName": { "value": "<sentinel-workspace-name>" },
+    "SentinelWorkspaceCustomerId": { "value": "<workspace-customer-id>" },
+    "SentinelWorkspaceSubscriptionId": { "value": "<subscription-id>" },
+    "CreateWatchlist": { "value": true },
+    "WatchlistAlias": { "value": "UALTimeBombDisarm" },
+    "WatchlistDisplayName": { "value": "UAL TimeBomb Disarm Queue" },
+    "PollFrequencyMinutes": { "value": 60 },
+    "OnlineWindowMinutes": { "value": 240 },
+    "RetryAfterHours": { "value": 1 },
+    "LiveResponseRetryAfterHours": { "value": 2 }
+  }
+}

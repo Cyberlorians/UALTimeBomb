@@ -1,0 +1,2 @@
+MdatpDeviceId,DeviceName,IncidentId,Reason,RequestedBy,EnqueuedTime,Attempts,Status,RetryAfterUtc,LastAttemptUtc,LastError,LastActionId
+SAMPLE-DO-NOT-RUN,sample-device,sample,Schema placeholder,system,,0,Template,,,,
