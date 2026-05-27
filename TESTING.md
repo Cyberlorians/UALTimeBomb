@@ -33,7 +33,9 @@ This file records public-safe validation status for the UAL TimeBomb Live Respon
 ## In-Progress / Watch Items
 
 - One ARM Live Response action on an earlier lab endpoint remained in `Pending` with command status `Created` while the Logic App continued polling. The endpoint was running, Defender services were running, and MDE gateway connectivity succeeded from the VM. Treat this as an MDE Live Response service queue/start delay, not a script failure, unless it later times out.
-- A second lab endpoint completed ARM successfully. Its follow-up DISARM restore was queued and entered `Pending` Live Response state while being monitored.
+- A second lab endpoint completed ARM successfully. On-box verification confirmed `bombdropped.txt` existed and Everyone was present in all five deny-logon rights. Its follow-up DISARM restore was queued and entered `Pending` Live Response state while being monitored.
+- Both pending Live Response actions had command status `Created` with no command start time while the affected VMs reported running Defender services and successful MDE gateway connectivity. The Logic Apps were left running to follow their normal polling/timeout paths.
+- `Check-UALTimeBombQueue` was disabled again after each controlled manual queue run.
 
 ## Next Checks
 
