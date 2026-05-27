@@ -53,7 +53,52 @@ The Logic Apps call those names directly.
 
 ## Deployment
 
-Deploy in this order:
+Deploy in this order. ARM and DISARM are separate so recovery can be deployed and permissioned before the ARM queue is enabled.
+
+### Step 1. Upload Live Response Scripts
+
+Upload the files from `src/LiveResponse` to the MDE Live Response Library:
+
+```text
+Arm-TimeBomb.ps1
+Disarm-TimeBomb.ps1
+```
+
+### Step 2A. Deploy Commercial Azure
+
+| Component | Deploy |
+|---|---|
+| ARM playbook (`ualtimebomb-arm`) | [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fcommercial%2Fualtimebomb-arm.json) |
+| DISARM playbook (`ualtimebomb-disarm`) | [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fcommercial%2Fualtimebomb-disarm.json) |
+| ARM queue checker (`Check-UALTimeBombQueue`) | [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fcommercial%2Fcheck-ualtimebomb-queue.json) |
+
+### Step 2B. Deploy Azure Government / GCC High
+
+| Component | Deploy |
+|---|---|
+| ARM playbook (`ualtimebomb-arm`) | [![Deploy to Azure Government](https://aka.ms/deploytoazuregovbutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fgcch%2Fualtimebomb-arm.json) |
+| DISARM playbook (`ualtimebomb-disarm`) | [![Deploy to Azure Government](https://aka.ms/deploytoazuregovbutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fgcch%2Fualtimebomb-disarm.json) |
+| ARM queue checker (`Check-UALTimeBombQueue`) | [![Deploy to Azure Government](https://aka.ms/deploytoazuregovbutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FCyberlorians%2FUALTimeBomb%2Fmain%2Fdeploy%2Fgcch%2Fcheck-ualtimebomb-queue.json) |
+
+### Step 3. Grant Permissions
+
+Run the permission helper after the templates deploy. Use `-WhatIf` first if you want to preview the RBAC and app-role grants.
+
+```powershell
+.\scripts\Grant-UALTimeBombPermissions.ps1 `
+  -SubscriptionId '<subscription-guid>' `
+  -PlaybookResourceGroup '<playbook-resource-group>' `
+  -SentinelResourceGroup '<sentinel-resource-group>' `
+  -SentinelWorkspaceName '<sentinel-workspace-name>'
+```
+
+### Step 4. Test Before Enabling The Queue
+
+Keep `Check-UALTimeBombQueue` disabled until DISARM is deployed, permissioned, and tested. For a controlled test, add a single watchlist row and manually run the relevant Logic App recurrence.
+
+### Manual Deployment Order
+
+Use this order when deploying from templates instead of the buttons:
 
 1. Upload the Live Response Library files from `src/LiveResponse`.
 2. Deploy `deploy/commercial/ualtimebomb-arm.json`.
@@ -64,24 +109,12 @@ Deploy in this order:
 7. Add a controlled test row to `UALTimeBombARM` or `UALTimeBombDisarm`.
 8. Manually run the relevant Logic App recurrence for a controlled test.
 
-Example permission helper:
-
-```powershell
-.\scripts\Grant-UALTimeBombPermissions.ps1 `
-  -SubscriptionId '<subscription-guid>' `
-  -PlaybookResourceGroup '<playbook-resource-group>' `
-  -SentinelResourceGroup '<sentinel-resource-group>' `
-  -SentinelWorkspaceName '<sentinel-workspace-name>'
-```
-
-Use `-WhatIf` first if you want to preview the RBAC and app-role grants.
-
 ## Repository Layout
 
 | Path | Purpose |
 |---|---|
 | `deploy/commercial` | Commercial Azure ARM templates and sample parameters. |
-| `deploy/gcch` | Notes for Azure Government / GCC High endpoint parameterization. |
+| `deploy/gcch` | Azure Government / GCC High templates and sample parameters. |
 | `assets/watchlists` | Sentinel watchlist CSV schemas for ARM and DISARM queues. |
 | `scripts` | Permission helper scripts for Logic App managed identities. |
 | `src/LiveResponse` | PowerShell scripts uploaded to the MDE Live Response Library. |

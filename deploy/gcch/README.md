@@ -1,8 +1,8 @@
 # Azure Government / GCC High
 
-The commercial templates are parameterized for API base URIs and managed identity audiences. For Azure Government or GCC High deployments, copy the commercial template and override the endpoint parameters for the target cloud.
+This folder contains Azure Government / GCC High variants of the UAL TimeBomb templates. They use government-cloud defaults for ARM, Defender for Endpoint, and Microsoft Security Advanced Hunting endpoints.
 
-Common values to review:
+Values to review before deploying:
 
 ```text
 DefenderApiBaseUri
@@ -13,4 +13,4 @@ ArmBaseUri
 ArmAudience
 ```
 
-Validate endpoint values with the tenant's Microsoft Defender and Azure cloud documentation before deploying.
+Validate endpoint values with the tenant's Microsoft Defender and Azure cloud documentation before deploying, especially if the tenant is GCC rather than GCC High.

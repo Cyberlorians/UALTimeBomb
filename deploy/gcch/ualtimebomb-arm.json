@@ -1,0 +1,283 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.7.5.0",
+  "metadata": {
+    "title": "UAL TimeBomb DEPLOY - User Access Lockout (Tag-Driven)",
+    "description": "Tag-driven UAL detonation. SOC tags devices in MDE with UALTimeBombDeploy; Logic App runs Arm-TimeBomb.ps1 via Live Response, denies all logon rights to Everyone, and reboots host. On success swaps trigger tag for UALTimeBombArmed. State signaled via MDE device tags only - no email.",
+    "author": "Security Engineering"
+  },
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "[resourceGroup().location]" },
+    "ArmTag":          { "type": "string", "defaultValue": "UALTimeBombDeploy" },
+    "DetonatedTag":    { "type": "string", "defaultValue": "UALTimeBombArmed" },
+    "LegacyDetonatedTag": { "type": "string", "defaultValue": "UALTimeBombDeployed" },
+    "FailedTag":       { "type": "string", "defaultValue": "UALTimeBombArmFailed" },
+    "ArmScriptName":   { "type": "string", "defaultValue": "Arm-TimeBomb.ps1" },
+    "DefenderApiBaseUri": {
+      "type": "string",
+      "defaultValue": "https://api-gov.securitycenter.microsoft.us",
+      "metadata": { "description": "Microsoft Defender for Endpoint API base URI. GCC High commonly uses https://api-gov.securitycenter.microsoft.us." }
+    },
+    "DefenderApiAudience": {
+      "type": "string",
+      "defaultValue": "https://securitycenter.microsoft.us/windowsatpservice",
+      "metadata": { "description": "Managed identity token audience for Defender for Endpoint API app roles." }
+    }
+  },
+  "variables": {
+    "PlaybookName": "ualtimebomb-arm",
+    "LiveResponseTimeoutMinutes": 30
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[variables('PlaybookName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "purpose": "security-playbook",
+        "tool": "ualtimebomb",
+        "component": "user-access-lockout-arm",
+        "trigger-model": "tag-driven"
+      },
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "state": "Disabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.7.5.0",
+          "parameters": {
+            "ArmTag":                     { "type": "String", "defaultValue": "[parameters('ArmTag')]" },
+            "DetonatedTag":               { "type": "String", "defaultValue": "[parameters('DetonatedTag')]" },
+            "LegacyDetonatedTag":         { "type": "String", "defaultValue": "[parameters('LegacyDetonatedTag')]" },
+            "FailedTag":                  { "type": "String", "defaultValue": "[parameters('FailedTag')]" },
+            "ArmScriptName":              { "type": "String", "defaultValue": "[parameters('ArmScriptName')]" },
+            "DefenderApiBaseUri":         { "type": "String", "defaultValue": "[parameters('DefenderApiBaseUri')]" },
+            "DefenderApiAudience":        { "type": "String", "defaultValue": "[parameters('DefenderApiAudience')]" },
+            "LiveResponseTimeoutMinutes": { "type": "Int",    "defaultValue": "[variables('LiveResponseTimeoutMinutes')]" }
+          },
+          "triggers": {
+            "manual": {
+              "type": "Request",
+              "kind": "Http",
+              "inputs": {
+                "schema": {}
+              }
+            }
+          },
+          "actions": {
+            "Query_Arm_Devices": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "GET",
+                "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines')}",
+                "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                "queries": {
+                  "$filter": "@{if(empty(triggerBody()?['MdatpDeviceId']), concat('machineTags/any(t:t eq ''', parameters('ArmTag'), ''') and onboardingStatus eq ''Onboarded'' and healthStatus eq ''Active'''), concat('id eq ''', triggerBody()?['MdatpDeviceId'], ''' and onboardingStatus eq ''Onboarded'' and healthStatus eq ''Active'''))}",
+                  "$select": "id,computerDnsName,osPlatform,healthStatus,lastSeen,machineTags"
+                }
+              }
+            },
+            "Parse_Arm_Devices": {
+              "type": "ParseJson",
+              "runAfter": { "Query_Arm_Devices": ["Succeeded"] },
+              "inputs": {
+                "content": "@body('Query_Arm_Devices')",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "computerDnsName": { "type": "string" },
+                          "osPlatform": { "type": "string" },
+                          "healthStatus": { "type": "string" },
+                          "lastSeen": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "For_Each_Arm_Device": {
+              "type": "Foreach",
+              "runAfter": { "Parse_Arm_Devices": ["Succeeded"] },
+              "foreach": "@body('Parse_Arm_Devices')?['value']",
+              "runtimeConfiguration": { "concurrency": { "repetitions": 1 } },
+              "actions": {
+                "Run_LR_Arm": {
+                  "type": "Http",
+                  "runAfter": {},
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/runliveresponse')}",
+                    "headers": { "Content-Type": "application/json" },
+                    "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                    "body": {
+                      "Commands": [
+                        { "type": "RunScript", "params": [
+                            { "key": "ScriptName", "value": "@{parameters('ArmScriptName')}" }
+                          ]
+                        }
+                      ],
+                      "Comment": "UAL TimeBomb DEPLOY (tag: @{parameters('ArmTag')})."
+                    }
+                  }
+                },
+                "Add_Failed_Tag_Arm_Request": {
+                  "type": "Http",
+                  "runAfter": { "Run_LR_Arm": ["Failed", "TimedOut"] },
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                    "headers": { "Content-Type": "application/json" },
+                    "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                    "body": { "Value": "@{parameters('FailedTag')}", "Action": "Add" }
+                  }
+                },
+                "Parse_LR_Arm_Response": {
+                  "type": "ParseJson",
+                  "runAfter": { "Run_LR_Arm": ["Succeeded"] },
+                  "inputs": {
+                    "content": "@body('Run_LR_Arm')",
+                    "schema": {
+                      "type": "object",
+                      "properties": { "id": { "type": "string" }, "status": { "type": "string" } }
+                    }
+                  }
+                },
+                "Poll_Arm_Until_Done": {
+                  "type": "Until",
+                  "runAfter": { "Parse_LR_Arm_Response": ["Succeeded"] },
+                  "expression": "@or(equals(coalesce(body('Get_Arm_Status')?['status'],''), 'Succeeded'), equals(coalesce(body('Get_Arm_Status')?['status'],''), 'Failed'), equals(coalesce(body('Get_Arm_Status')?['status'],''), 'Cancelled'))",
+                  "limit": { "count": 60, "timeout": "PT@{parameters('LiveResponseTimeoutMinutes')}M" },
+                  "actions": {
+                    "Wait_Arm_30s": {
+                      "type": "Wait",
+                      "runAfter": {},
+                      "inputs": { "interval": { "count": 30, "unit": "Second" } }
+                    },
+                    "Get_Arm_Status": {
+                      "type": "Http",
+                      "runAfter": { "Wait_Arm_30s": ["Succeeded"] },
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machineactions/', encodeURIComponent(body('Parse_LR_Arm_Response')?['id']))}",
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" }
+                      }
+                    }
+                  }
+                },
+                "Add_Failed_Tag_Arm_Poll": {
+                  "type": "Http",
+                  "runAfter": { "Poll_Arm_Until_Done": ["Failed", "TimedOut"] },
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                    "headers": { "Content-Type": "application/json" },
+                    "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                    "body": { "Value": "@{parameters('FailedTag')}", "Action": "Add" }
+                  }
+                },
+                "If_Arm_Succeeded": {
+                  "type": "If",
+                  "runAfter": { "Poll_Arm_Until_Done": ["Succeeded"] },
+                  "expression": { "and": [{ "equals": ["@body('Get_Arm_Status')?['status']", "Succeeded"] }] },
+                  "actions": {
+                    "Add_Detonated_Tag": {
+                      "type": "Http",
+                      "runAfter": {},
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                        "body": { "Value": "@{parameters('DetonatedTag')}", "Action": "Add" }
+                      }
+                    },
+                    "Remove_Arm_Tag": {
+                      "type": "Http",
+                      "runAfter": { "Add_Detonated_Tag": ["Succeeded"] },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                        "body": { "Value": "@{parameters('ArmTag')}", "Action": "Remove" }
+                      }
+                    },
+                    "Remove_Legacy_Detonated_Tag": {
+                      "type": "Http",
+                      "runAfter": { "Remove_Arm_Tag": ["Succeeded", "Failed", "TimedOut"] },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                        "body": { "Value": "@{parameters('LegacyDetonatedTag')}", "Action": "Remove" }
+                      }
+                    },
+                    "Remove_Arm_Tag_Final": {
+                      "type": "Http",
+                      "runAfter": { "Remove_Legacy_Detonated_Tag": ["Succeeded", "Failed", "TimedOut"] },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                        "body": { "Value": "@{parameters('ArmTag')}", "Action": "Remove" }
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Add_Failed_Tag_Arm": {
+                        "type": "Http",
+                        "runAfter": {},
+                        "inputs": {
+                          "method": "POST",
+                          "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Arm_Device')?['id']), '/tags')}",
+                          "headers": { "Content-Type": "application/json" },
+                          "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('DefenderApiAudience')" },
+                          "body": { "Value": "@{parameters('FailedTag')}", "Action": "Add" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "Run_Summary": {
+              "type": "Compose",
+              "runAfter": { "For_Each_Arm_Device": ["Succeeded"] },
+              "inputs": {
+                "armDeviceCount": "@length(body('Parse_Arm_Devices')?['value'])",
+                "armTag":         "@parameters('ArmTag')"
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {}
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppName":      { "type": "string", "value": "[variables('PlaybookName')]" },
+    "logicAppResourceId":{ "type": "string", "value": "[resourceId('Microsoft.Logic/workflows', variables('PlaybookName'))]" },
+    "principalId":       { "type": "string", "value": "[reference(resourceId('Microsoft.Logic/workflows', variables('PlaybookName')), '2019-05-01', 'full').identity.principalId]" },
+    "requiredDefenderApiPermissions": {
+      "type": "array",
+      "value": [
+        "Machine.Read.All",
+        "Machine.ReadWrite.All",
+        "Machine.LiveResponse"
+      ]
+    }
+  }
+}

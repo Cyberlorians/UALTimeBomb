@@ -1,0 +1,712 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.1.0.0",
+  "metadata": {
+    "title": "Check-UALTimeBombQueue",
+    "description": "Creates the UALTimeBombARM Sentinel watchlist and deploys a recurrence-driven queue checker. The checker reads manually queued devices, verifies Defender for Endpoint readiness using DeviceInfo advanced hunting telemetry, checks for active Live Response collisions, adds the UAL arm tag, and triggers ualtimebomb-arm.",
+    "author": "Security Engineering"
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "WorkflowState": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Keep Disabled until ualtimebomb-disarm is deployed, permissioned, and enabled for recovery."
+      }
+    },
+    "SentinelWorkspaceResourceGroup": {
+      "type": "string"
+    },
+    "SentinelWorkspaceName": {
+      "type": "string"
+    },
+    "SentinelWorkspaceCustomerId": {
+      "type": "string"
+    },
+    "SentinelWorkspaceSubscriptionId": {
+      "type": "string",
+      "defaultValue": "[subscription().subscriptionId]"
+    },
+    "CreateWatchlist": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Creates or updates the Sentinel watchlist shell with the expected CSV schema."
+      }
+    },
+    "WatchlistAlias": {
+      "type": "string",
+      "defaultValue": "UALTimeBombARM"
+    },
+    "WatchlistDisplayName": {
+      "type": "string",
+      "defaultValue": "UAL TimeBomb ARM Queue"
+    },
+    "PollFrequencyMinutes": {
+      "type": "int",
+      "defaultValue": 60
+    },
+    "OnlineWindowMinutes": {
+      "type": "int",
+      "defaultValue": 60,
+      "metadata": {
+        "description": "A device must have Defender DeviceInfo SensorHealthState Active and recent telemetry within this many minutes to be dispatched."
+      }
+    },
+    "RetryAfterHours": {
+      "type": "int",
+      "defaultValue": 1
+    },
+    "LiveResponseRetryAfterHours": {
+      "type": "int",
+      "defaultValue": 2
+    },
+    "ArmWorkflowName": {
+      "type": "string",
+      "defaultValue": "ualtimebomb-arm"
+    },
+    "ArmTag": {
+      "type": "string",
+      "defaultValue": "UALTimeBombDeploy"
+    },
+    "DefenderApiBaseUri": {
+      "type": "string",
+      "defaultValue": "https://api-gov.securitycenter.microsoft.us",
+      "metadata": {
+        "description": "Microsoft Defender for Endpoint API base URI."
+      }
+    },
+    "DefenderApiAudience": {
+      "type": "string",
+      "defaultValue": "https://securitycenter.microsoft.us/windowsatpservice",
+      "metadata": {
+        "description": "Managed identity token audience for Defender for Endpoint API calls."
+      }
+    },
+    "AdvancedHuntingApiBaseUri": {
+      "type": "string",
+      "defaultValue": "https://api-gov.security.microsoft.us",
+      "metadata": {
+        "description": "Microsoft Security API base URI for Advanced Hunting queries."
+      }
+    },
+    "AdvancedHuntingApiAudience": {
+      "type": "string",
+      "defaultValue": "https://api-gov.security.microsoft.us",
+      "metadata": {
+        "description": "Managed identity token audience for Microsoft Security Advanced Hunting API calls."
+      }
+    },
+    "ArmBaseUri": {
+      "type": "string",
+      "defaultValue": "https://management.usgovcloudapi.net",
+      "metadata": {
+        "description": "Azure Resource Manager base URI used by watchlist REST calls."
+      }
+    },
+    "ArmAudience": {
+      "type": "string",
+      "defaultValue": "https://management.usgovcloudapi.net/",
+      "metadata": {
+        "description": "Managed identity token audience/resource for Azure Resource Manager calls."
+      }
+    }
+  },
+  "variables": {
+    "PlaybookName": "Check-UALTimeBombQueue",
+    "watchlistHeader": "MdatpDeviceId,DeviceName,IncidentId,Reason,RequestedBy,EnqueuedTime,Attempts,Status,RetryAfterUtc,LastAttemptUtc,LastError,LastActionId\nSAMPLE-DO-NOT-RUN,sample-device,sample,Schema placeholder,system,,0,Template,,,,\n",
+    "watchlistResourceId": "[concat('/subscriptions/', parameters('SentinelWorkspaceSubscriptionId'), '/resourceGroups/', parameters('SentinelWorkspaceResourceGroup'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('SentinelWorkspaceName'), '/providers/Microsoft.SecurityInsights/watchlists/', parameters('WatchlistAlias'))]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('CreateWatchlist')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "Deploy-UALTimeBombARM-Watchlist",
+      "subscriptionId": "[parameters('SentinelWorkspaceSubscriptionId')]",
+      "resourceGroup": "[parameters('SentinelWorkspaceResourceGroup')]",
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "parameters": {
+          "SentinelWorkspaceName": {
+            "value": "[parameters('SentinelWorkspaceName')]"
+          },
+          "WatchlistAlias": {
+            "value": "[parameters('WatchlistAlias')]"
+          },
+          "WatchlistDisplayName": {
+            "value": "[parameters('WatchlistDisplayName')]"
+          },
+          "WatchlistHeader": {
+            "value": "[variables('watchlistHeader')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.1.0.0",
+          "parameters": {
+            "SentinelWorkspaceName": {
+              "type": "string"
+            },
+            "WatchlistAlias": {
+              "type": "string"
+            },
+            "WatchlistDisplayName": {
+              "type": "string"
+            },
+            "WatchlistHeader": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces/providers/watchlists",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/Microsoft.SecurityInsights/{1}', parameters('SentinelWorkspaceName'), parameters('WatchlistAlias'))]",
+              "properties": {
+                "displayName": "[parameters('WatchlistDisplayName')]",
+                "watchlistAlias": "[parameters('WatchlistAlias')]",
+                "source": "Local file",
+                "provider": "Microsoft",
+                "description": "Manual queue of Defender devices approved for UAL TimeBomb ARM dispatch.",
+                "itemsSearchKey": "MdatpDeviceId",
+                "contentType": "text/csv",
+                "numberOfLinesToSkip": 0,
+                "rawContent": "[parameters('WatchlistHeader')]"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[variables('PlaybookName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "purpose": "security-playbook",
+        "tool": "ualtimebomb",
+        "component": "user-access-lockout-arm-queue",
+        "trigger-model": "recurrence-watchlist"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "state": "[parameters('WorkflowState')]",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.1.0.0",
+          "parameters": {
+            "WorkspaceSubscriptionId": {
+              "type": "String",
+              "defaultValue": "[parameters('SentinelWorkspaceSubscriptionId')]"
+            },
+            "WorkspaceResourceGroup": {
+              "type": "String",
+              "defaultValue": "[parameters('SentinelWorkspaceResourceGroup')]"
+            },
+            "WorkspaceName": {
+              "type": "String",
+              "defaultValue": "[parameters('SentinelWorkspaceName')]"
+            },
+            "WorkspaceCustomerId": {
+              "type": "String",
+              "defaultValue": "[parameters('SentinelWorkspaceCustomerId')]"
+            },
+            "WatchlistAlias": {
+              "type": "String",
+              "defaultValue": "[parameters('WatchlistAlias')]"
+            },
+            "OnlineWindowMinutes": {
+              "type": "Int",
+              "defaultValue": "[parameters('OnlineWindowMinutes')]"
+            },
+            "RetryAfterHours": {
+              "type": "Int",
+              "defaultValue": "[parameters('RetryAfterHours')]"
+            },
+            "LiveResponseRetryAfterHours": {
+              "type": "Int",
+              "defaultValue": "[parameters('LiveResponseRetryAfterHours')]"
+            },
+            "ArmTag": {
+              "type": "String",
+              "defaultValue": "[parameters('ArmTag')]"
+            },
+            "DefenderApiBaseUri": {
+              "type": "String",
+              "defaultValue": "[parameters('DefenderApiBaseUri')]"
+            },
+            "DefenderApiAudience": {
+              "type": "String",
+              "defaultValue": "[parameters('DefenderApiAudience')]"
+            },
+            "AdvancedHuntingApiBaseUri": {
+              "type": "String",
+              "defaultValue": "[parameters('AdvancedHuntingApiBaseUri')]"
+            },
+            "AdvancedHuntingApiAudience": {
+              "type": "String",
+              "defaultValue": "[parameters('AdvancedHuntingApiAudience')]"
+            },
+            "ArmBaseUri": {
+              "type": "String",
+              "defaultValue": "[parameters('ArmBaseUri')]"
+            },
+            "ArmAudience": {
+              "type": "String",
+              "defaultValue": "[parameters('ArmAudience')]"
+            },
+            "ArmTriggerUrl": {
+              "type": "SecureString"
+            }
+          },
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": "[parameters('PollFrequencyMinutes')]"
+              }
+            }
+          },
+          "actions": {
+            "Run_Queue_Query": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "GET",
+                "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems?api-version=2023-09-01-preview')}",
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('ArmAudience')"
+                }
+              }
+            },
+            "For_Each_Queue_Row": {
+              "type": "Foreach",
+              "runAfter": {
+                "Run_Queue_Query": [
+                  "Succeeded"
+                ]
+              },
+              "foreach": "@coalesce(body('Run_Queue_Query')?['value'], json('[]'))",
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "repetitions": 1
+                }
+              },
+              "actions": {
+                "If_Row_Eligible": {
+                  "type": "If",
+                  "runAfter": {},
+                  "expression": "@and(not(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId'])), or(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Status']), equals(toLower(coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Status'], '')), 'pending'), equals(toLower(coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Status'], '')), 'queued'), equals(toLower(coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Status'], '')), 'retry'), equals(toLower(coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Status'], '')), 'blockedliveresponse')), or(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RetryAfterUtc']), lessOrEquals(ticks(coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RetryAfterUtc'], '1900-01-01T00:00:00Z')), ticks(utcNow()))))",
+                  "actions": {
+                    "Get_MDE_Device": {
+                      "type": "Http",
+                      "runAfter": {},
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']))}",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "@parameters('DefenderApiAudience')"
+                        }
+                      }
+                    },
+                    "Query_DeviceInfo": {
+                      "type": "Http",
+                      "runAfter": {
+                        "Get_MDE_Device": [
+                          "Succeeded"
+                        ]
+                      },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('AdvancedHuntingApiBaseUri'), '/api/advancedhunting/run')}",
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "@parameters('AdvancedHuntingApiAudience')"
+                        },
+                        "body": {
+                          "Query": "@{concat('DeviceInfo | where DeviceId =~ ''', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId'], ''' | summarize arg_max(Timestamp, DeviceName, OnboardingStatus, SensorHealthState, OSPlatform) by DeviceId | project DeviceId, DeviceName, OnboardingStatus, SensorHealthState, OSPlatform, LatestTimestamp=Timestamp')}"
+                        }
+                      }
+                    },
+                    "Update_Watchlist_Device_Query_Failed": {
+                      "type": "Http",
+                      "runAfter": {
+                        "Get_MDE_Device": [
+                          "Failed",
+                          "TimedOut"
+                        ]
+                      },
+                      "inputs": {
+                        "method": "PUT",
+                        "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "@parameters('ArmAudience')"
+                        },
+                        "body": {
+                          "properties": {
+                            "itemsKeyValue": {
+                              "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                              "DeviceName": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName']}",
+                              "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                              "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                              "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                              "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                              "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                              "Status": "Retry",
+                              "RetryAfterUtc": "@{addHours(utcNow(), parameters('RetryAfterHours'))}",
+                              "LastAttemptUtc": "@{utcNow()}",
+                              "LastError": "Failed to query Defender machine by MdatpDeviceId.",
+                              "LastActionId": "@{workflow().run.name}"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "Update_Watchlist_DeviceInfo_Query_Failed": {
+                      "type": "Http",
+                      "runAfter": {
+                        "Query_DeviceInfo": [
+                          "Failed",
+                          "TimedOut"
+                        ]
+                      },
+                      "inputs": {
+                        "method": "PUT",
+                        "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "@parameters('ArmAudience')"
+                        },
+                        "body": {
+                          "properties": {
+                            "itemsKeyValue": {
+                              "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                              "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                              "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                              "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                              "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                              "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                              "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                              "Status": "Retry",
+                              "RetryAfterUtc": "@{addHours(utcNow(), parameters('RetryAfterHours'))}",
+                              "LastAttemptUtc": "@{utcNow()}",
+                              "LastError": "Failed to query Defender DeviceInfo via Advanced Hunting.",
+                              "LastActionId": "@{workflow().run.name}"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "If_Device_Ready": {
+                      "type": "If",
+                      "runAfter": {
+                        "Query_DeviceInfo": [
+                          "Succeeded"
+                        ]
+                      },
+                      "expression": "@and(not(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]')))), equals(if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), '', first(body('Query_DeviceInfo')?['Results'])?['OnboardingStatus']), 'Onboarded'), equals(if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), '', first(body('Query_DeviceInfo')?['Results'])?['SensorHealthState']), 'Active'), greaterOrEquals(ticks(if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), '1900-01-01T00:00:00Z', coalesce(first(body('Query_DeviceInfo')?['Results'])?['LatestTimestamp'], '1900-01-01T00:00:00Z'))), ticks(addMinutes(utcNow(), mul(-1, parameters('OnlineWindowMinutes'))))))",
+                      "actions": {
+                        "Query_Active_Live_Response_Actions": {
+                          "type": "Http",
+                          "runAfter": {},
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machineactions')}",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "audience": "@parameters('DefenderApiAudience')"
+                            },
+                            "queries": {
+                              "$filter": "@{concat('machineId eq ''', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId'], ''' and type eq ''LiveResponse'' and (status eq ''Pending'' or status eq ''InProgress'')')}",
+                              "$top": "1"
+                            }
+                          }
+                        },
+                        "If_Active_Live_Response_Exists": {
+                          "type": "If",
+                          "runAfter": {
+                            "Query_Active_Live_Response_Actions": [
+                              "Succeeded"
+                            ]
+                          },
+                          "expression": "@greater(length(coalesce(body('Query_Active_Live_Response_Actions')?['value'], json('[]'))), 0)",
+                          "actions": {
+                            "Update_Watchlist_Blocked_Live_Response": {
+                              "type": "Http",
+                              "runAfter": {},
+                              "inputs": {
+                                "method": "PUT",
+                                "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "audience": "@parameters('ArmAudience')"
+                                },
+                                "body": {
+                                  "properties": {
+                                    "itemsKeyValue": {
+                                      "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                                      "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                                      "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                                      "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                                      "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                                      "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                                      "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                                      "Status": "BlockedLiveResponse",
+                                      "RetryAfterUtc": "@{addHours(utcNow(), parameters('LiveResponseRetryAfterHours'))}",
+                                      "LastAttemptUtc": "@{utcNow()}",
+                                      "LastError": "@{concat('Active Live Response action already exists: ', first(body('Query_Active_Live_Response_Actions')?['value'])?['id'])}",
+                                      "LastActionId": "@{first(body('Query_Active_Live_Response_Actions')?['value'])?['id']}"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Add_UAL_Arm_Tag": {
+                                "type": "Http",
+                                "runAfter": {},
+                                "inputs": {
+                                  "method": "POST",
+                                  "uri": "@{concat(parameters('DefenderApiBaseUri'), '/api/machines/', encodeURIComponent(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']), '/tags')}",
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "audience": "@parameters('DefenderApiAudience')"
+                                  },
+                                  "body": {
+                                    "Value": "@{parameters('ArmTag')}",
+                                    "Action": "Add"
+                                  }
+                                }
+                              },
+                              "Trigger_UAL_Arm": {
+                                "type": "Http",
+                                "runAfter": {
+                                  "Add_UAL_Arm_Tag": [
+                                    "Succeeded"
+                                  ]
+                                },
+                                "inputs": {
+                                  "method": "POST",
+                                  "uri": "@parameters('ArmTriggerUrl')",
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "body": {
+                                    "WatchlistItemId": "@{items('For_Each_Queue_Row')?['name']}",
+                                    "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                                    "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                                    "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                                    "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                                    "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                                    "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                                    "ArmTag": "@{parameters('ArmTag')}"
+                                  }
+                                }
+                              },
+                              "Update_Watchlist_Dispatched": {
+                                "type": "Http",
+                                "runAfter": {
+                                  "Trigger_UAL_Arm": [
+                                    "Succeeded"
+                                  ]
+                                },
+                                "inputs": {
+                                  "method": "PUT",
+                                  "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "audience": "@parameters('ArmAudience')"
+                                  },
+                                  "body": {
+                                    "properties": {
+                                      "itemsKeyValue": {
+                                        "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                                        "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                                        "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                                        "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                                        "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                                        "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                                        "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                                        "Status": "Dispatched",
+                                        "RetryAfterUtc": "",
+                                        "LastAttemptUtc": "@{utcNow()}",
+                                        "LastError": "",
+                                        "LastActionId": "@{workflow().run.name}"
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "Update_Watchlist_Trigger_Failed": {
+                                "type": "Http",
+                                "runAfter": {
+                                  "Trigger_UAL_Arm": [
+                                    "Failed",
+                                    "TimedOut"
+                                  ]
+                                },
+                                "inputs": {
+                                  "method": "PUT",
+                                  "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "audience": "@parameters('ArmAudience')"
+                                  },
+                                  "body": {
+                                    "properties": {
+                                      "itemsKeyValue": {
+                                        "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                                        "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                                        "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                                        "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                                        "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                                        "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                                        "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                                        "Status": "Retry",
+                                        "RetryAfterUtc": "@{addHours(utcNow(), parameters('RetryAfterHours'))}",
+                                        "LastAttemptUtc": "@{utcNow()}",
+                                        "LastError": "Failed to trigger ualtimebomb-arm after adding the arm tag.",
+                                        "LastActionId": "@{workflow().run.name}"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "Update_Watchlist_Device_Not_Ready": {
+                            "type": "Http",
+                            "runAfter": {},
+                            "inputs": {
+                              "method": "PUT",
+                              "uri": "@{concat(parameters('ArmBaseUri'), '/subscriptions/', encodeURIComponent(parameters('WorkspaceSubscriptionId')), '/resourceGroups/', encodeURIComponent(parameters('WorkspaceResourceGroup')), '/providers/Microsoft.OperationalInsights/workspaces/', encodeURIComponent(parameters('WorkspaceName')), '/providers/Microsoft.SecurityInsights/watchlists/', encodeURIComponent(parameters('WatchlistAlias')), '/watchlistItems/', encodeURIComponent(items('For_Each_Queue_Row')?['name']), '?api-version=2023-11-01')}",
+                              "headers": {
+                                "Content-Type": "application/json"
+                              },
+                              "authentication": {
+                                "type": "ManagedServiceIdentity",
+                                "audience": "@parameters('ArmAudience')"
+                              },
+                              "body": {
+                                "properties": {
+                                  "itemsKeyValue": {
+                                    "MdatpDeviceId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['MdatpDeviceId']}",
+                                    "DeviceName": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['DeviceName'], body('Get_MDE_Device')?['computerDnsName'])}",
+                                    "IncidentId": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['IncidentId']}",
+                                    "Reason": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Reason']}",
+                                    "RequestedBy": "@{items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['RequestedBy']}",
+                                    "EnqueuedTime": "@{coalesce(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['EnqueuedTime'], utcNow())}",
+                                    "Attempts": "@{string(add(int(if(empty(items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts']), '0', items('For_Each_Queue_Row')?['properties']?['itemsKeyValue']?['Attempts'])), 1))}",
+                                    "Status": "Retry",
+                                    "RetryAfterUtc": "@{addHours(utcNow(), parameters('RetryAfterHours'))}",
+                                    "LastAttemptUtc": "@{utcNow()}",
+                                    "LastError": "@{concat('Device not ready for Live Response. onboardingStatus=', if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), 'unknown', coalesce(first(body('Query_DeviceInfo')?['Results'])?['OnboardingStatus'], 'unknown')), '; sensorHealthState=', if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), 'unknown', coalesce(first(body('Query_DeviceInfo')?['Results'])?['SensorHealthState'], 'unknown')), '; latestDeviceInfo=', if(empty(coalesce(body('Query_DeviceInfo')?['Results'], json('[]'))), 'unknown', coalesce(first(body('Query_DeviceInfo')?['Results'])?['LatestTimestamp'], 'unknown')))}",
+                                    "LastActionId": "@{workflow().run.name}"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {}
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "ArmTriggerUrl": {
+            "value": "[listCallbackURL(resourceId('Microsoft.Logic/workflows/triggers', parameters('ArmWorkflowName'), 'manual'), '2019-05-01').value]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "playbookName": {
+      "type": "string",
+      "value": "[variables('PlaybookName')]"
+    },
+    "logicAppResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', variables('PlaybookName'))]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', variables('PlaybookName')), '2019-05-01', 'full').identity.principalId]"
+    },
+    "watchlistAlias": {
+      "type": "string",
+      "value": "[parameters('WatchlistAlias')]"
+    },
+    "watchlistResourceId": {
+      "type": "string",
+      "value": "[variables('watchlistResourceId')]"
+    },
+    "requiredAzureRoles": {
+      "type": "array",
+      "value": [
+        "Microsoft Sentinel Contributor on the Sentinel workspace"
+      ]
+    },
+    "requiredDefenderApiPermissions": {
+      "type": "array",
+      "value": [
+        "Machine.Read.All",
+        "Machine.ReadWrite.All"
+      ]
+    }
+  }
+}
