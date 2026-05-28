@@ -11,6 +11,19 @@ This file records public-safe validation status for the UAL TimeBomb Live Respon
 
 ## Completed Validation
 
+### ARM Retest - May 28, 2026
+
+- Target endpoint: `usm262346`.
+- Baseline before ARM was clean: no UAL TimeBomb tags, `C:\ProgramData\TimeBomb\bombdropped.txt` absent, and Everyone (`S-1-1-0`) absent from all five deny-logon rights.
+- A stale prior ARM Live Response action was cancelled before retest: `fe6c1708-6afe-49c8-b3dc-7955c9e5d388`.
+- `ualtimebomb-arm` was triggered directly with the MDE device ID because the ARM watchlist row update path was blocked during manual retest.
+- ARM Logic App run `08584216173169501543781917866CU59` succeeded.
+- MDE Live Response action `8d70bcd8-5969-4446-86e7-21e6eb05b7fa` succeeded and `Arm-TimeBomb.ps1` command status was `Completed`.
+- MDE applied `UALTimeBombArmed`.
+- On-box verification confirmed `C:\ProgramData\TimeBomb\bombdropped.txt` existed.
+- On-box verification confirmed Everyone (`S-1-1-0`) was present on all five deny-logon rights.
+- Current endpoint state after this retest: armed.
+
 ### DISARM
 
 - A previously armed Windows lab endpoint was restored through `ualtimebomb-disarm`.
