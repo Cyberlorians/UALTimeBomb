@@ -427,11 +427,6 @@ Column reference (same schema for both watchlists):
 12. **Immediately disable the queue checker again** until DISARM has been
     proven: **Check-UALTimeBombQueue → Overview → Disable**.
 
-[scripts/Get-UALTimeBombEndpointState.ps1](scripts/Get-UALTimeBombEndpointState.ps1)
-is a one-shot endpoint verifier you can run via Azure Run Command or any
-out-of-band session to dump `BombDropped` and all five deny-right booleans as
-JSON.
-
 If any step fails, see Troubleshooting below.
 
 </details>
@@ -491,7 +486,7 @@ separate enable step.
 | [deploy/commercial](deploy/commercial) | Commercial Azure ARM templates and sample parameters. |
 | [deploy/gcch](deploy/gcch) | Azure Government / GCC High ARM templates and sample parameters. |
 | [assets/watchlists](assets/watchlists) | Sentinel watchlist CSV starters for ARM and DISARM queues. |
-| [scripts](scripts) | Permission helper, endpoint verifier, and no-reboot recovery helper. |
+| [scripts](scripts) | Permission helper for Logic App managed identities. |
 | [src/LiveResponse](src/LiveResponse) | PowerShell scripts uploaded to the MDE Live Response Library. |
 | [TESTING.md](TESTING.md) | Public-safe validation log for ARM, DISARM, and queue paths. |
 
@@ -534,8 +529,7 @@ device is a no-op.
 `Disarm-TimeBomb.ps1` removes **only** Everyone from those same rights and
 preserves any other existing assignees. It deletes
 `C:\ProgramData\TimeBomb\bombdropped.txt` and reboots unless `-NoReboot` is
-supplied. A non-reboot recovery helper for out-of-band restore is in
-[scripts/Clear-UALTimeBombRightsNoReboot.ps1](scripts/Clear-UALTimeBombRightsNoReboot.ps1).
+supplied.
 
 ---
 
