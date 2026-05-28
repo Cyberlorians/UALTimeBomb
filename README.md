@@ -168,6 +168,26 @@ All three templates take the same four workspace identifiers.
 | Live Response Retry After Hours | `2` | Rows blocked by an existing Live Response action are deferred this many hours. |
 | Workflow State | `Disabled` | The queue Logic App is created in `Disabled` state on purpose. You enable it in Step 7. |
 
+> **Tuning `Online Window Minutes` after deploy.** Both
+> `Check-UALTimeBombQueue` and `ualtimebomb-disarm` carry their own
+> `OnlineWindowMinutes` parameter (default `60`). To change it without
+> redeploying, open the Logic App in the Azure portal, then **Development
+> Tools → Logic app code view**, find the parameter block, edit
+> `parameters.OnlineWindowMinutes.defaultValue`, and **Save**:
+>
+> ```text
+> Check-UALTimeBombQueue -> Logic app code view ->
+>   "parameters": { "OnlineWindowMinutes": { "type": "Int", "defaultValue": 60 } }
+>
+> ualtimebomb-disarm     -> Logic app code view ->
+>   "parameters": { "OnlineWindowMinutes": { "type": "Int", "defaultValue": 60 } }
+> ```
+>
+> `ualtimebomb-arm` does not have this parameter — readiness is gated by the
+> queue checker, not the ARM payload caller. If you prefer the
+> infrastructure-as-code path, redeploy the matching template with a new
+> `OnlineWindowMinutes` value.
+
 **Cloud-Specific Endpoint Defaults**
 
 Pre-filled per cloud by the matching template. Do not change unless you know
