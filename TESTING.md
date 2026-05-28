@@ -24,6 +24,21 @@ This file records public-safe validation status for the UAL TimeBomb Live Respon
 - On-box verification confirmed Everyone (`S-1-1-0`) was present on all five deny-logon rights.
 - Current endpoint state after this retest: armed.
 
+### Queue ARM Test - May 28, 2026
+
+- Target endpoint: `attackiq01`.
+- Baseline before queue test was clean: no UAL TimeBomb tags, `C:\ProgramData\TimeBomb\bombdropped.txt` absent, and Everyone (`S-1-1-0`) absent from all five deny-logon rights.
+- ARM watchlist staged with exactly one row for the target in `Pending` with `Attempts=0`.
+- `Check-UALTimeBombQueue` was enabled for a single recurrence, manually triggered, then disabled again immediately after dispatch.
+- Queue Logic App run succeeded and moved the watchlist row to `Status=Dispatched`, `Attempts=1`, with `LastActionId` populated.
+- `ualtimebomb-arm` was invoked by the queue and succeeded end-to-end.
+- MDE Live Response action requestor was `ualtimebomb-arm`, `ScriptName=Arm-TimeBomb.ps1`, action status `Succeeded`, command status `Completed`.
+- On-box verification confirmed `C:\ProgramData\TimeBomb\bombdropped.txt` existed.
+- On-box verification confirmed Everyone (`S-1-1-0`) was present on all five deny-logon rights.
+- MDE machine tag application lagged after script success; tag write was not yet reflected on the machine entity at verification time. Live Response action success confirms ARM payload applied regardless of tag propagation.
+- `Check-UALTimeBombQueue` returned to `Disabled` after the test.
+- Current endpoint state after this test: armed.
+
 ### DISARM
 
 - A previously armed Windows lab endpoint was restored through `ualtimebomb-disarm`.
