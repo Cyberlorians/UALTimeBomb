@@ -101,6 +101,12 @@ A disposable Windows test device, onboarded to MDE and recently active
 Out-of-band recovery for the test device (console, snapshot, or PXE rebuild)
 ```
 
+> **Manual step you must do yourself:** the ARM templates do **not** upload
+> `Arm-TimeBomb.ps1` or `Disarm-TimeBomb.ps1` to the MDE Live Response
+> Library. MDE has no ARM resource for Library files. After Step 1 you must
+> upload both scripts from [src/LiveResponse](src/LiveResponse) into the
+> Microsoft Defender portal yourself — see Step 3 below.
+
 ---
 
 ## Deployment
@@ -273,8 +279,10 @@ endpoint for the signed-in cloud (commercial vs Government).
 
 ## Verification
 
-Click any step to expand. Steps 3 and 4 are one-time setup. Steps 5 and 6 are
-the controlled smoke tests. Step 7 turns on the recurrence.
+Click any step to expand. **Step 3 is mandatory after every deploy** — the
+Live Response scripts are not uploaded by ARM and must be pushed to MDE by
+hand. Steps 3 and 4 are one-time setup. Steps 5 and 6 are the controlled
+smoke tests. Step 7 turns on the recurrence.
 
 <details>
 <summary><b>Step 3. Upload The MDE Live Response Library Files</b></summary>
